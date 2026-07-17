@@ -36,6 +36,36 @@ licensed Jabmi (legal counsel).
 
 ## Status
 
-Pre-development. Architecture and data-source research complete
-(see `docs/`). Next step: build the document ingestion pipeline (Phase 1 in
-the architecture doc).
+**Phase 1 (ingestion pipeline) built and tested.** The `ingest/` package
+crawls the official sources, downloads every PDF (rate-limited, cached,
+checksummed), extracts and cleans the text, and chunks it into
+section-level JSONL with citations metadata.
+
+### Running Phase 1
+
+```bash
+pip install -r requirements.txt
+
+# 1. Download every Act / Rule PDF from the registered official sources
+#    (needs open internet access to oag.gov.bt / nab.gov.bt)
+python -m ingest.pipeline crawl
+
+# 2. Build the corpus: extract, clean, chunk -> corpus/chunks.jsonl
+python -m ingest.pipeline build
+
+# tests
+python -m pytest tests/
+```
+
+Each line of `corpus/chunks.jsonl` is one legal section:
+
+```json
+{"doc_title": "Penal Code of Bhutan 2004", "section_number": "92",
+ "section_heading": "CHAPTER 3 — OFFENCES AGAINST THE PERSON — Murder",
+ "text": "A defendant shall be guilty of the offence of murder if ...",
+ "page": 2, "source_url": "https://oag.gov.bt/...pdf", "doc_type": "act",
+ "language": "en", "part": 0}
+```
+
+Next: Phase 2 — index the corpus into Postgres/pgvector and build the
+retrieval + LLM answering core (see the architecture doc).

@@ -1,0 +1,9 @@
+# downloaded corpus (large binaries — keep out of git; manifest.json is the record)
+corpus/raw/*/
+corpus/raw/manifest.json
+corpus/chunks.jsonl
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
