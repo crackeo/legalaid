@@ -94,4 +94,24 @@ disclaimer.
 `eval/questions.jsonl` is the starter evaluation set (retrieval hit-rate);
 grow it with legally reviewed Q&A pairs as the corpus fills in.
 
-Next: Phase 3 — FastAPI backend + web chat UI (see the architecture doc).
+### Running Phase 3 (web chatbot)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+# open http://localhost:8000
+```
+
+The web app streams answers token-by-token over Server-Sent Events, shows
+the cited sources (linked to the official PDFs) under each answer, keeps
+per-session conversation history so follow-up questions work, and collects
+👍/👎 feedback per answer. If citation verification fails on the full text,
+the client is told to replace the streamed draft with a safe response — an
+unverified answer is never final.
+
+Privacy: no accounts, no tracking; sessions live in a local SQLite file and
+`SessionStore.purge_older_than(days)` implements retention. Config via env:
+`LEGALAID_INDEX_DB` (default `corpus/index.db`), `LEGALAID_SESSIONS_DB`
+(default `corpus/sessions.db`).
+
+Next: Phase 4 — voice (push-to-talk mic → Whisper STT → this pipeline → TTS).

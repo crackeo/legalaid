@@ -109,6 +109,74 @@ class LegalAidRAG:
                     "contact the Bhutan National Legal Institute's Legal Aid Center.")
         return "".join(b.text for b in response.content if b.type == "text")
 
+    def ask_stream(self, question: str, history: list[dict] | None = None,
+                   k: int = 6):
+        """Generator of events for a streaming UI.
+
+        Yields dicts: {"type": "sources", ...} once, then {"type": "delta",
+        "text": ...} as tokens arrive, and finally {"type": "done", ...}
+        with the verified full answer. Citation verification runs on the
+        complete text; if it fails (after one non-streamed retry) a
+        {"type": "replace", ...} event tells the client to swap the shown
+        text for the safe version — so nothing unverified is ever final.
+        """
+        hits = retrieve(self.store, self.embedder, question, k=k)
+        yield {"type": "sources", "sources": [
+            {"n": i, "doc_title": h.doc_title, "section": h.section_number,
+             "page": h.page, "source_url": h.source_url}
+            for i, h in enumerate(hits, start=1)
+        ]}
+        if not hits:
+            text = "I don't find this in the laws available to me." + DISCLAIMER
+            yield {"type": "replace", "text": text}
+            yield {"type": "done", "text": text, "verified": True, "cited": []}
+            return
+
+        context = build_context(hits)
+        messages = list(history or [])
+        messages.append({"role": "user",
+                         "content": f"{context}\n\nQUESTION: {question}"})
+        parts = []
+        with self.llm.messages.stream(
+            model=self.model,
+            max_tokens=16000,
+            system=[{"type": "text", "text": SYSTEM_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            thinking={"type": "adaptive"},
+            messages=messages,
+        ) as stream:
+            for token in stream.text_stream:
+                parts.append(token)
+                yield {"type": "delta", "text": token}
+            response = stream.get_final_message()
+
+        if response.stop_reason == "refusal":
+            text = ("I can't help with that request. For legal assistance, "
+                    "contact the Bhutan National Legal Institute's Legal Aid "
+                    "Center.") + DISCLAIMER
+            yield {"type": "replace", "text": text}
+            yield {"type": "done", "text": text, "verified": True, "cited": []}
+            return
+
+        text = "".join(parts)
+        ok, cited = verify_citations(text, len(hits))
+        if not ok:
+            # Retry unstreamed; replace what the client has shown so far.
+            text = self._call_llm(
+                question + "\n\n(Your previous draft cited provisions that were "
+                "not supplied or made claims without citations. Answer again, "
+                "citing only the numbered provisions above.)",
+                context, history,
+            )
+            ok, cited = verify_citations(text, len(hits))
+            if not ok:
+                text = ("I couldn't produce a reliably cited answer to this "
+                        "question. Please rephrase, or consult the Bhutan "
+                        "National Legal Institute's Legal Aid Center.")
+            yield {"type": "replace", "text": text + DISCLAIMER}
+        yield {"type": "done", "text": text + DISCLAIMER,
+               "verified": ok, "cited": cited}
+
     def ask(self, question: str, history: list[dict] | None = None,
             k: int = 6) -> Answer:
         hits = retrieve(self.store, self.embedder, question, k=k)

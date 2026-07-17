@@ -28,7 +28,9 @@ class Hit:
 
 class Store:
     def __init__(self, db_path: str | Path):
-        self.db = sqlite3.connect(str(db_path))
+        # check_same_thread=False: the web app serves queries from worker
+        # threads; access is read-only after indexing, so this is safe.
+        self.db = sqlite3.connect(str(db_path), check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self._create()
         self._matrix: np.ndarray | None = None  # lazily-loaded embedding matrix
