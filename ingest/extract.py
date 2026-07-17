@@ -9,11 +9,46 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
+# OCR fallback for scanned PDFs. Optional: needs `pip install pytesseract
+# pillow` and the tesseract binary (apt install tesseract-ocr). Without it,
+# scanned pages come back empty and the build step flags the document.
+try:
+    import pytesseract
+    from PIL import Image
 
-def extract_pages(pdf_path: Path) -> list[str]:
-    """Raw text per page. Empty string for pages with no text layer."""
+    OCR_AVAILABLE = bool(pytesseract.get_tesseract_version())
+except Exception:  # not installed / binary missing
+    OCR_AVAILABLE = False
+
+_MIN_TEXT_CHARS = 20  # fewer than this on a page => treat as scanned
+_OCR_DPI = 300
+
+
+def _ocr_page(page: "fitz.Page") -> str:
+    import io
+
+    pix = page.get_pixmap(dpi=_OCR_DPI, colorspace=fitz.csGRAY)
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    return pytesseract.image_to_string(image, lang="eng")
+
+
+def extract_pages(pdf_path: Path, ocr: bool = True) -> list[str]:
+    """Raw text per page; scanned pages are OCRed when tesseract is available.
+
+    OCR runs per page, not per document — many OAG PDFs mix born-digital
+    pages with scanned annexes.
+    """
+    pages = []
     with fitz.open(pdf_path) as doc:
-        return [page.get_text("text") for page in doc]
+        for page in doc:
+            text = page.get_text("text")
+            if ocr and OCR_AVAILABLE and len(text.strip()) < _MIN_TEXT_CHARS:
+                try:
+                    text = _ocr_page(page)
+                except Exception:
+                    pass  # keep whatever the text layer had
+            pages.append(text)
+    return pages
 
 
 _PAGE_NUMBER_RE = re.compile(r"^\s*(?:page\s*)?[-–—]?\s*\d{1,4}\s*[-–—]?\s*$", re.I)

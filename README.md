@@ -172,5 +172,39 @@ citation rules), and every such answer carries an explicit experimental
 warning. This stays experimental until evaluated by native speakers;
 Dzongkha *speech* remains a research track needing transcribed audio data.
 
+### Running Phase 6 (production readiness)
+
+**OCR for scanned PDFs** — pages without a text layer are now OCRed
+automatically during extraction (per page, since many OAG PDFs mix
+born-digital pages with scanned annexes). Needs the tesseract binary:
+
+```bash
+sudo apt install tesseract-ocr && pip install pytesseract pillow
+python -m ingest.pipeline update --force   # rebuild to pick up scanned Acts
+```
+
+**Rate limiting** — `/api/chat` and `/api/voice/*` are capped per client IP
+(default 20 requests/minute, `LEGALAID_RATE_LIMIT` to change) so a single
+client can't burn the Claude/Whisper budget. Honours `X-Forwarded-For`
+behind a reverse proxy; returns 429 when exceeded.
+
+**Health endpoint** — `GET /api/health` reports corpus size, embedder,
+model, and voice availability; wired into the Docker healthcheck.
+
+**Docker deployment (single VM):**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...             # + OPENAI/VOYAGE/TELEGRAM as wanted
+docker compose run --rm web python -m ingest.pipeline update   # fill the corpus
+docker compose up -d                                           # web on :8000
+docker compose --profile telegram up -d                        # + telegram bot
+# weekly cron on the host:
+# 0 3 * * 1  cd /srv/legalaid && docker compose run --rm web python -m ingest.pipeline update
+```
+
+Put TLS in front (Caddy/nginx — browsers require HTTPS for microphone
+access). The `corpus/` volume holds everything stateful: raw PDFs, the
+chunk corpus, the search index, and chat sessions.
+
 Still open (needs partners, not code): legal review of the eval set with
-BNLI/OAG, native-speaker Dzongkha evaluation, and OCR for scanned PDFs.
+BNLI/OAG and native-speaker Dzongkha evaluation.

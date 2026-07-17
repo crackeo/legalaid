@@ -20,7 +20,7 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,7 @@ from rag.answer import LegalAidRAG
 from rag.embed import embedder_from_env
 from rag.store import Store
 
+from .ratelimit import RateLimiter
 from .sessions import SessionStore
 from .voice import MAX_AUDIO_BYTES, MAX_SPEAK_CHARS, speech_text, stt_from_env, tts_from_env
 
@@ -52,8 +53,22 @@ class FeedbackRequest(BaseModel):
 
 def create_app(rag: LegalAidRAG | None = None,
                sessions: SessionStore | None = None,
-               stt=None, tts=None) -> FastAPI:
+               stt=None, tts=None,
+               limiter: RateLimiter | None = None) -> FastAPI:
     app = FastAPI(title="Bhutan Legal Aid AI")
+
+    if limiter is None:
+        limiter = RateLimiter(
+            per_minute=int(os.environ.get("LEGALAID_RATE_LIMIT", "20")))
+
+    def check_rate(request: Request) -> None:
+        # Honour the first X-Forwarded-For hop when behind a reverse proxy.
+        fwd = request.headers.get("x-forwarded-for", "")
+        client = fwd.split(",")[0].strip() or (
+            request.client.host if request.client else "unknown")
+        if not limiter.allow(client):
+            raise HTTPException(
+                429, "Too many requests — please wait a minute and try again.")
 
     if stt is None:
         stt = stt_from_env()
@@ -70,7 +85,8 @@ def create_app(rag: LegalAidRAG | None = None,
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     @app.post("/api/chat")
-    def chat(req: ChatRequest):
+    def chat(req: ChatRequest, request: Request):
+        check_rate(request)
         sid = req.session_id
         if sid and not sessions.session_exists(sid):
             raise HTTPException(404, "unknown session")
@@ -114,12 +130,24 @@ def create_app(rag: LegalAidRAG | None = None,
         sessions.add_feedback(req.message_id, req.vote, req.comment)
         return {"ok": True}
 
+    @app.get("/api/health")
+    def health():
+        """Liveness + corpus visibility, for Docker healthchecks and ops."""
+        return {
+            "status": "ok",
+            "chunks": rag.store.count(),
+            "embedder": rag.embedder.name,
+            "model": rag.model,
+            "voice": {"stt": stt is not None, "tts": tts is not None},
+        }
+
     @app.get("/api/voice/config")
     def voice_config():
         return {"stt": stt is not None, "tts": tts is not None}
 
     @app.post("/api/voice/transcribe")
-    async def transcribe(audio: UploadFile):
+    async def transcribe(audio: UploadFile, request: Request):
+        check_rate(request)
         if stt is None:
             raise HTTPException(503, "voice is not configured (set OPENAI_API_KEY)")
         data = await audio.read()
@@ -136,7 +164,8 @@ def create_app(rag: LegalAidRAG | None = None,
         return {"text": text}
 
     @app.post("/api/voice/speak")
-    def speak(req: SpeakRequest):
+    def speak(req: SpeakRequest, request: Request):
+        check_rate(request)
         if tts is None:
             raise HTTPException(503, "voice is not configured (set OPENAI_API_KEY)")
         try:
