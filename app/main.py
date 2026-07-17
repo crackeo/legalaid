@@ -31,8 +31,11 @@ from rag.answer import LegalAidRAG
 from rag.embed import embedder_from_env
 from rag.store import Store
 
+from fastapi import BackgroundTasks
+
 from .ratelimit import RateLimiter
 from .sessions import SessionStore
+from .whatsapp import WhatsAppBot, bot_from_env, verify_signature
 from .voice import MAX_AUDIO_BYTES, MAX_SPEAK_CHARS, speech_text, stt_from_env, tts_from_env
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -59,7 +62,8 @@ class FeedbackRequest(BaseModel):
 def create_app(rag: LegalAidRAG | None = None,
                sessions: SessionStore | None = None,
                stt=None, tts=None,
-               limiter: RateLimiter | None = None) -> FastAPI:
+               limiter: RateLimiter | None = None,
+               whatsapp: WhatsAppBot | None = None) -> FastAPI:
     app = FastAPI(title="Bhutan Legal Aid AI")
 
     if limiter is None:
@@ -186,6 +190,44 @@ def create_app(rag: LegalAidRAG | None = None,
         except Exception:
             raise HTTPException(502, "speech synthesis failed, please try again")
         return Response(content=audio, media_type="audio/mpeg")
+
+    # -- WhatsApp webhook (enabled when WHATSAPP_* env or bot injected) -----
+
+    if whatsapp is None:
+        whatsapp = bot_from_env(rag, stt=stt)
+    wa_verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+    wa_app_secret = os.environ.get("WHATSAPP_APP_SECRET", "")
+
+    if whatsapp is not None:
+
+        @app.get("/api/whatsapp/webhook")
+        def whatsapp_verify(request: Request):
+            """Meta's one-time webhook verification handshake."""
+            params = request.query_params
+            if (params.get("hub.mode") == "subscribe"
+                    and wa_verify_token
+                    and secrets.compare_digest(
+                        params.get("hub.verify_token", ""), wa_verify_token)):
+                return Response(params.get("hub.challenge", ""),
+                                media_type="text/plain")
+            raise HTTPException(403, "verification failed")
+
+        @app.post("/api/whatsapp/webhook")
+        async def whatsapp_webhook(request: Request,
+                                   background: BackgroundTasks):
+            raw = await request.body()
+            if wa_app_secret and not verify_signature(
+                    wa_app_secret, raw,
+                    request.headers.get("x-hub-signature-256")):
+                raise HTTPException(403, "bad signature")
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                raise HTTPException(422, "invalid JSON")
+            # Ack immediately (Meta retries slow webhooks); answer in the
+            # background — replies go out via the Graph API, not this response.
+            background.add_task(whatsapp.handle_payload, payload)
+            return {"ok": True}
 
     # -- admin (enabled only when LEGALAID_ADMIN_TOKEN is set) -------------
 

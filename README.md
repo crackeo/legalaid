@@ -224,7 +224,32 @@ recorded per message (existing session databases migrate automatically),
 and every Q&A emits a structured log line with duration, verification
 result, and citation count.
 
+### Running Phase 8 (WhatsApp channel)
+
+The same cited-answer pipeline over WhatsApp, via the Meta Cloud API
+(webhook-based — the web app must be reachable over public HTTPS):
+
+1. On [developers.facebook.com](https://developers.facebook.com): create a
+   Business app → add the WhatsApp product → get a permanent access token
+   and the phone number ID.
+2. Configure the webhook to `https://<your-host>/api/whatsapp/webhook`,
+   subscribed to `messages`, with a verify token you choose.
+3. Run the web app with:
+
+```bash
+export WHATSAPP_TOKEN=EAAG...            # Graph API token
+export WHATSAPP_PHONE_NUMBER_ID=1234...
+export WHATSAPP_VERIFY_TOKEN=<same as portal>
+export WHATSAPP_APP_SECRET=...           # recommended: enables signature checks
+```
+
+Incoming texts get cited answers with the disclaimer; voice notes are
+transcribed when `OPENAI_API_KEY` is set; greetings get a welcome message.
+The webhook acknowledges instantly and answers in a background task (Meta
+retries slow webhooks), deduplicates re-delivered messages, and — with the
+app secret set — rejects any request whose `X-Hub-Signature-256` HMAC
+doesn't verify. Unconfigured deployments don't expose the endpoint at all.
+
 Still open (needs partners, not code): legal review of the eval set with
-BNLI/OAG and native-speaker Dzongkha evaluation. Possible next phases:
-WhatsApp channel (needs Meta Business API credentials) and the Dzongkha
-speech data-collection track.
+BNLI/OAG, native-speaker Dzongkha evaluation, and the Dzongkha speech
+data-collection track.
