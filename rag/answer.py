@@ -1,0 +1,140 @@
+"""The answering layer: retrieved provisions + Claude, with citation enforcement.
+
+Every answer must cite the retrieved sections it relies on using [n] markers.
+After generation we verify programmatically that every cited marker refers to
+a section that was actually provided; an answer with invented or missing
+citations is replaced by a safe refusal. Legal information, not legal advice.
+"""
+
+import re
+from dataclasses import dataclass, field
+
+from .retrieve import retrieve
+from .store import Hit, Store
+
+MODEL = "claude-opus-4-8"
+
+DISCLAIMER = (
+    "\n\n---\n*This is legal information, not legal advice. For advice on "
+    "your specific situation, contact the Bhutan National Legal Institute's "
+    "Legal Aid Center or a licensed Jabmi (legal counsel).*"
+)
+
+SYSTEM_PROMPT = """\
+You are a legal information assistant for the Kingdom of Bhutan. You answer
+questions using ONLY the numbered legal provisions supplied in each request —
+never from your general knowledge or memory of other legal systems.
+
+Rules, in priority order:
+1. Ground every legal claim in the supplied provisions and cite them with
+   bracketed markers like [1] or [2][3] immediately after the claim. Also
+   name the law in prose (e.g. "Under the Penal Code of Bhutan 2004,
+   Section 92 [1] ..."). Never cite a number that was not supplied.
+2. If the supplied provisions do not answer the question, say plainly:
+   "I don't find this in the laws available to me" and suggest which Act
+   might cover it, clearly labelled as a suggestion. Do not guess.
+3. Never invent section numbers, penalties, or legal thresholds.
+4. Do not predict the outcome of any specific case or advise anyone on how
+   to commit, conceal, or evade liability for an offence. Explaining what
+   the law says — including penalties — is always fine.
+5. If the question suggests immediate danger (violence, abuse), include the
+   relevant law AND advise contacting the Royal Bhutan Police, and for
+   domestic violence also RENEW and the NCWC helpline.
+6. Answer in clear, plain language a non-lawyer can follow. Quote the exact
+   statutory words for the load-bearing part. Be concise.
+"""
+
+_CITATION_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+@dataclass
+class Answer:
+    text: str
+    sources: list[Hit]
+    cited: list[int] = field(default_factory=list)   # 1-based indices into sources
+    verified: bool = False
+
+
+def build_context(hits: list[Hit]) -> str:
+    parts = []
+    for i, h in enumerate(hits, start=1):
+        header = f"[{i}] {h.doc_title} — Section {h.section_number}"
+        if h.section_heading:
+            header += f" ({h.section_heading})"
+        parts.append(f"{header}, page {h.page}\n{h.text}")
+    return "PROVISIONS:\n\n" + "\n\n".join(parts)
+
+
+def verify_citations(text: str, n_sources: int) -> tuple[bool, list[int]]:
+    """Every cited [n] must exist; a substantive answer must cite something."""
+    cited = sorted({int(m) for m in _CITATION_RE.findall(text)})
+    if any(c < 1 or c > n_sources for c in cited):
+        return False, cited
+    is_refusal = "don't find this in the laws" in text.lower()
+    if not cited and not is_refusal:
+        return False, cited
+    return True, cited
+
+
+class LegalAidRAG:
+    """retrieve -> prompt -> Claude -> verify -> answer with disclaimer."""
+
+    def __init__(self, store: Store, embedder, llm=None, model: str = MODEL):
+        self.store = store
+        self.embedder = embedder
+        self.model = model
+        if llm is None:
+            import anthropic
+            llm = anthropic.Anthropic()
+        self.llm = llm  # anything with .messages.stream(...) (fake in tests)
+
+    def _call_llm(self, question: str, context: str,
+                  history: list[dict] | None) -> str:
+        messages = list(history or [])
+        messages.append({
+            "role": "user",
+            "content": f"{context}\n\nQUESTION: {question}",
+        })
+        with self.llm.messages.stream(
+            model=self.model,
+            max_tokens=16000,
+            system=[{"type": "text", "text": SYSTEM_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            thinking={"type": "adaptive"},
+            messages=messages,
+        ) as stream:
+            response = stream.get_final_message()
+        if response.stop_reason == "refusal":
+            return ("I can't help with that request. For legal assistance, "
+                    "contact the Bhutan National Legal Institute's Legal Aid Center.")
+        return "".join(b.text for b in response.content if b.type == "text")
+
+    def ask(self, question: str, history: list[dict] | None = None,
+            k: int = 6) -> Answer:
+        hits = retrieve(self.store, self.embedder, question, k=k)
+        if not hits:
+            return Answer(
+                text="I don't find this in the laws available to me." + DISCLAIMER,
+                sources=[], verified=True,
+            )
+        text = self._call_llm(question, build_context(hits), history)
+        ok, cited = verify_citations(text, len(hits))
+        if not ok:
+            # One retry with an explicit correction, then refuse rather than
+            # ship an answer whose citations don't check out.
+            text = self._call_llm(
+                question + "\n\n(Your previous draft cited provisions that were "
+                "not supplied or made claims without citations. Answer again, "
+                "citing only the numbered provisions above.)",
+                build_context(hits), history,
+            )
+            ok, cited = verify_citations(text, len(hits))
+            if not ok:
+                return Answer(
+                    text="I couldn't produce a reliably cited answer to this "
+                         "question. Please rephrase, or consult the Bhutan "
+                         "National Legal Institute's Legal Aid Center." + DISCLAIMER,
+                    sources=hits, verified=False,
+                )
+        return Answer(text=text + DISCLAIMER, sources=hits,
+                      cited=cited, verified=True)

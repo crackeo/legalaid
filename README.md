@@ -67,5 +67,31 @@ Each line of `corpus/chunks.jsonl` is one legal section:
  "language": "en", "part": 0}
 ```
 
-Next: Phase 2 — index the corpus into Postgres/pgvector and build the
-retrieval + LLM answering core (see the architecture doc).
+### Running Phase 2 (RAG core)
+
+```bash
+# 1. Build the search index from the Phase 1 corpus (SQLite: BM25 + vectors)
+#    Uses Voyage AI embeddings if VOYAGE_API_KEY is set; otherwise an
+#    offline hashing embedder (BM25 then carries most of the weight).
+python -m rag.cli index
+
+# 2. Check retrieval quality — no API key needed; run on every change
+python -m rag.cli eval
+
+# 3. Ask a question (needs ANTHROPIC_API_KEY for Claude)
+export ANTHROPIC_API_KEY=sk-ant-...
+python -m rag.cli ask "What is the punishment for defamation in Bhutan?"
+```
+
+How answering works: the question runs through hybrid retrieval (BM25 +
+vector similarity, fused with reciprocal rank fusion), the top provisions go
+to Claude (`claude-opus-4-8`) with strict grounding rules, and every citation
+in the answer is programmatically verified against the supplied provisions —
+an answer with invented or missing citations is retried once, then replaced
+by a safe refusal. Every answer carries the legal-information-not-legal-advice
+disclaimer.
+
+`eval/questions.jsonl` is the starter evaluation set (retrieval hit-rate);
+grow it with legally reviewed Q&A pairs as the corpus fills in.
+
+Next: Phase 3 — FastAPI backend + web chat UI (see the architecture doc).
