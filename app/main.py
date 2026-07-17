@@ -17,7 +17,10 @@ for feedback.
 """
 
 import json
+import logging
 import os
+import secrets
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
@@ -34,6 +37,8 @@ from .voice import MAX_AUDIO_BYTES, MAX_SPEAK_CHARS, speech_text, stt_from_env, 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_QUESTION_CHARS = 4000
+
+log = logging.getLogger("legalaid")
 
 
 class ChatRequest(BaseModel):
@@ -99,6 +104,7 @@ def create_app(rag: LegalAidRAG | None = None,
             yield sse({"type": "session", "session_id": sid})
             final = None
             sources = []
+            started = time.monotonic()
             try:
                 for event in rag.ask_stream(req.message, history=history):
                     if event["type"] == "sources":
@@ -107,14 +113,21 @@ def create_app(rag: LegalAidRAG | None = None,
                         final = event
                     yield sse(event)
             except Exception:
+                log.exception("chat: answering failed (session %s)", sid)
                 yield sse({"type": "error",
                            "text": "Something went wrong answering this "
                                    "question. Please try again."})
                 return
             if final is not None:
+                duration_ms = int((time.monotonic() - started) * 1000)
                 mid = sessions.add_message(sid, "assistant", final["text"],
                                            sources=sources,
-                                           verified=final["verified"])
+                                           verified=final["verified"],
+                                           duration_ms=duration_ms)
+                log.info("chat: answered in %dms verified=%s cited=%d "
+                         "sources=%d session=%s", duration_ms,
+                         final["verified"], len(final.get("cited", [])),
+                         len(sources), sid)
                 yield sse({"type": "saved", "message_id": mid})
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -173,6 +186,34 @@ def create_app(rag: LegalAidRAG | None = None,
         except Exception:
             raise HTTPException(502, "speech synthesis failed, please try again")
         return Response(content=audio, media_type="audio/mpeg")
+
+    # -- admin (enabled only when LEGALAID_ADMIN_TOKEN is set) -------------
+
+    admin_token = os.environ.get("LEGALAID_ADMIN_TOKEN", "")
+
+    def check_admin(request: Request) -> None:
+        if not admin_token:
+            raise HTTPException(404)  # admin disabled: don't reveal it exists
+        supplied = request.headers.get("authorization", "")
+        if not supplied.startswith("Bearer ") or not secrets.compare_digest(
+                supplied[7:], admin_token):
+            raise HTTPException(401, "invalid admin token")
+
+    @app.get("/api/admin/stats")
+    def admin_stats(request: Request):
+        check_admin(request)
+        return sessions.stats()
+
+    @app.get("/api/admin/feedback")
+    def admin_feedback(request: Request, limit: int = 50):
+        check_admin(request)
+        return {"feedback": sessions.recent_feedback(limit=min(limit, 200))}
+
+    @app.get("/admin")
+    def admin_page():
+        if not admin_token:
+            raise HTTPException(404)
+        return FileResponse(WEB_DIR / "admin.html")
 
     @app.get("/")
     def index():

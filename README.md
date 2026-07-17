@@ -206,5 +206,25 @@ Put TLS in front (Caddy/nginx — browsers require HTTPS for microphone
 access). The `corpus/` volume holds everything stateful: raw PDFs, the
 chunk corpus, the search index, and chat sessions.
 
+### Running Phase 7 (operations & quality dashboard)
+
+```bash
+export LEGALAID_ADMIN_TOKEN=$(openssl rand -hex 24)   # enables /admin
+uvicorn app.main:app --port 8000
+# open http://localhost:8000/admin and paste the token
+```
+
+The dashboard shows sessions/questions/answers, the **verified-citation
+rate** (the system's core quality number), average answer latency,
+👍/👎 totals, a questions-per-day chart, and the **feedback review queue** —
+every vote with its question, answer, comment, and whether the citation
+check passed. Admin is token-gated (constant-time comparison) and entirely
+absent (404) when `LEGALAID_ADMIN_TOKEN` is unset. Answer latency is now
+recorded per message (existing session databases migrate automatically),
+and every Q&A emits a structured log line with duration, verification
+result, and citation count.
+
 Still open (needs partners, not code): legal review of the eval set with
-BNLI/OAG and native-speaker Dzongkha evaluation.
+BNLI/OAG and native-speaker Dzongkha evaluation. Possible next phases:
+WhatsApp channel (needs Meta Business API credentials) and the Dzongkha
+speech data-collection track.

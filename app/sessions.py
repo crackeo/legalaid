@@ -34,6 +34,11 @@ class SessionStore:
             comment TEXT, created_at REAL
         );
         """)
+        # Lightweight migration for databases created before Phase 7.
+        try:
+            self.db.execute("ALTER TABLE messages ADD COLUMN duration_ms INTEGER")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self.db.commit()
 
     def create_session(self) -> str:
@@ -48,12 +53,14 @@ class SessionStore:
         ).fetchone() is not None
 
     def add_message(self, sid: str, role: str, content: str,
-                    sources: list | None = None, verified: bool | None = None) -> int:
+                    sources: list | None = None, verified: bool | None = None,
+                    duration_ms: int | None = None) -> int:
         cur = self.db.execute(
             "INSERT INTO messages (session_id, role, content, sources, verified,"
-            " created_at) VALUES (?,?,?,?,?,?)",
+            " created_at, duration_ms) VALUES (?,?,?,?,?,?,?)",
             (sid, role, content, json.dumps(sources or []),
-             None if verified is None else int(verified), time.time()),
+             None if verified is None else int(verified), time.time(),
+             duration_ms),
         )
         self.db.commit()
         return cur.lastrowid
@@ -83,6 +90,45 @@ class SessionStore:
             " VALUES (?,?,?,?)", (message_id, vote, comment, time.time()),
         )
         self.db.commit()
+
+    def stats(self, days: int = 14) -> dict:
+        """Operational overview for the admin dashboard."""
+        one = lambda q, *p: self.db.execute(q, p).fetchone()[0]
+        answers = one("SELECT COUNT(*) FROM messages WHERE role='assistant'")
+        verified = one("SELECT COUNT(*) FROM messages WHERE role='assistant'"
+                       " AND verified=1")
+        cutoff = time.time() - days * 86400
+        per_day = self.db.execute(
+            "SELECT date(created_at, 'unixepoch') d, COUNT(*)"
+            " FROM messages WHERE role='user' AND created_at >= ?"
+            " GROUP BY d ORDER BY d", (cutoff,)).fetchall()
+        return {
+            "sessions": one("SELECT COUNT(*) FROM sessions"),
+            "questions": one("SELECT COUNT(*) FROM messages WHERE role='user'"),
+            "answers": answers,
+            "verified_rate": round(verified / answers, 3) if answers else None,
+            "avg_answer_ms": one("SELECT CAST(AVG(duration_ms) AS INTEGER)"
+                                 " FROM messages WHERE duration_ms IS NOT NULL"),
+            "feedback_up": one("SELECT COUNT(*) FROM feedback WHERE vote > 0"),
+            "feedback_down": one("SELECT COUNT(*) FROM feedback WHERE vote < 0"),
+            "questions_per_day": [{"day": d, "count": c} for d, c in per_day],
+        }
+
+    def recent_feedback(self, limit: int = 50) -> list[dict]:
+        """Latest feedback with question + answer, newest first (review queue)."""
+        rows = self.db.execute("""
+            SELECT f.created_at, f.vote, f.comment, m.id, m.content, m.verified,
+                   (SELECT content FROM messages u
+                    WHERE u.session_id = m.session_id AND u.role = 'user'
+                      AND u.id < m.id ORDER BY u.id DESC LIMIT 1)
+            FROM feedback f JOIN messages m ON m.id = f.message_id
+            ORDER BY f.created_at DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return [{"at": at, "vote": vote, "comment": comment, "message_id": mid,
+                 "answer": answer,
+                 "verified": None if v is None else bool(v),
+                 "question": question}
+                for at, vote, comment, mid, answer, v, question in rows]
 
     def purge_older_than(self, days: float) -> int:
         cutoff = time.time() - days * 86400
