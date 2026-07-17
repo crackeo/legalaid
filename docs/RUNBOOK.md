@@ -36,7 +36,28 @@ Gate: retrieval hit-rate should be near 100% on the starter set; read
 every `fail` in `eval/graded_report.jsonl`. Fix retrieval/chunking before
 launch — do not ship on a failing eval.
 
-## 3. Deploy
+## 3a. Deploy on Render (easiest)
+
+1. Render dashboard → **New → Blueprint** → connect the GitHub repo (uses
+   `render.yaml`; TLS and the domain are automatic).
+2. In the service's **Environment** tab set `ANTHROPIC_API_KEY` (plus
+   `OPENAI_API_KEY` for voice, `WHATSAPP_*` for WhatsApp).
+   `LEGALAID_ADMIN_TOKEN` is auto-generated — copy it for `/admin`.
+3. First boot serves an **empty index** — fill the corpus once from the
+   service's **Shell** tab (steps 1–2 of this runbook: `crawl`, `build`,
+   `rag.cli index`, `rag.cli eval`). The disk at `/srv/legalaid/corpus`
+   persists across deploys.
+4. Verify `https://<service>.onrender.com/api/health` shows the chunk
+   count, then ask a test question at the root URL.
+5. Weekly: run `python -m ingest.pipeline update` in the Shell tab (the
+   persistent disk is attached to this one service, so run updates there
+   rather than from a separate cron service).
+
+Telegram: just set `TELEGRAM_BOT_TOKEN` in the Environment tab — the
+container's start script runs the bot alongside the web app in the same
+service, sharing the corpus disk.
+
+## 3b. Deploy on a VPS (docker compose)
 
 ```bash
 # .env: ANTHROPIC_API_KEY (+ OPENAI_API_KEY for voice, VOYAGE_API_KEY,
