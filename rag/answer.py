@@ -107,8 +107,8 @@ class LegalAidRAG:
         self.embedder = embedder
         self.model = model
         if llm is None:
-            import anthropic
-            llm = anthropic.Anthropic()
+            from .llm import llm_from_env
+            llm = llm_from_env()  # Claude preferred; Gemini via GEMINI_API_KEY
         self.llm = llm  # anything with .messages.stream(...) (fake in tests)
 
     def _call_llm(self, question: str, context: str,

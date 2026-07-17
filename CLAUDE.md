@@ -55,7 +55,8 @@ python -m app.telegram                     # telegram bot
 
 | Var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | answers (required in production) |
+| `ANTHROPIC_API_KEY` | answers via Claude (preferred backend) |
+| `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`) | answers via Google Gemini when no Anthropic key is set (`rag/llm.py`) |
 | `OPENAI_API_KEY` | voice: Whisper STT + TTS (optional) |
 | `VOYAGE_API_KEY` | semantic embeddings; else offline hash embedder |
 | `LEGALAID_ADMIN_TOKEN` | enables `/admin` (absent ⇒ 404) |

@@ -78,8 +78,8 @@ python -m rag.cli index
 # 2. Check retrieval quality — no API key needed; run on every change
 python -m rag.cli eval
 
-# 3. Ask a question (needs ANTHROPIC_API_KEY for Claude)
-export ANTHROPIC_API_KEY=sk-ant-...
+# 3. Ask a question — Claude (recommended) or Gemini
+export ANTHROPIC_API_KEY=sk-ant-...   # or: export GEMINI_API_KEY=AIza...
 python -m rag.cli ask "What is the punishment for defamation in Bhutan?"
 ```
 
