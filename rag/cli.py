@@ -63,6 +63,36 @@ def cmd_eval(args) -> int:
     return 0 if hits_at_k == total else 1
 
 
+def cmd_export_feedback(args) -> int:
+    """Export downvoted answers (with their questions) as review candidates.
+
+    Each line is a question/answer pair a legal reviewer can check; confirmed
+    problems become new entries in eval/questions.jsonl. This closes the loop
+    from the 👎 button to the evaluation set.
+    """
+    import sqlite3
+    db = sqlite3.connect(args.sessions_db)
+    rows = db.execute("""
+        SELECT f.created_at, f.vote, f.comment, m.id, m.content, m.verified,
+               (SELECT content FROM messages u
+                WHERE u.session_id = m.session_id AND u.role = 'user'
+                  AND u.id < m.id ORDER BY u.id DESC LIMIT 1)
+        FROM feedback f JOIN messages m ON m.id = f.message_id
+        WHERE f.vote < 0 ORDER BY f.created_at
+    """).fetchall()
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as out:
+        for created_at, vote, comment, mid, answer, verified, question in rows:
+            out.write(json.dumps({
+                "question": question, "answer": answer,
+                "verified": bool(verified) if verified is not None else None,
+                "comment": comment, "message_id": mid, "at": created_at,
+            }, ensure_ascii=False) + "\n")
+    print(f"exported {len(rows)} downvoted answers to {out_path}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rag.cli", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -82,6 +112,12 @@ def main(argv=None) -> int:
     p.add_argument("--db", default="corpus/index.db")
     p.add_argument("--k", type=int, default=6)
     p.set_defaults(func=cmd_eval)
+
+    p = sub.add_parser("export-feedback",
+                       help="dump downvoted answers for legal review")
+    p.add_argument("--sessions-db", default="corpus/sessions.db")
+    p.add_argument("--out", default="eval/review_queue.jsonl")
+    p.set_defaults(func=cmd_export_feedback)
 
     args = parser.parse_args(argv)
     return args.func(args)

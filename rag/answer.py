@@ -46,6 +46,25 @@ Rules, in priority order:
 
 _CITATION_RE = re.compile(r"\[(\d{1,2})\]")
 
+# Dzongkha is written in Tibetan script (U+0F00–U+0FFF).
+_DZONGKHA_RE = re.compile(r"[ༀ-࿿]")
+
+DZONGKHA_NOTE = (
+    "\n\n*Dzongkha support is experimental (རྫོང་ཁའི་རྒྱབ་སྐྱོར་འདི་ཚོད་ལྟའི་གནས་"
+    "རིམ་ལུ་ཡོད) — the underlying laws are indexed in English and the "
+    "translation has not been reviewed by a native speaker. Verify against "
+    "the cited English provisions.*"
+)
+
+DZONGKHA_INSTRUCTION = (
+    "\n\nThe user asked in Dzongkha. Reply in Dzongkha, but keep Act titles "
+    "and section numbers in English and follow the same [n] citation rules."
+)
+
+
+def is_dzongkha(text: str) -> bool:
+    return bool(_DZONGKHA_RE.search(text))
+
 
 @dataclass
 class Answer:
@@ -93,7 +112,8 @@ class LegalAidRAG:
         messages = list(history or [])
         messages.append({
             "role": "user",
-            "content": f"{context}\n\nQUESTION: {question}",
+            "content": f"{context}\n\nQUESTION: {question}"
+                       + (DZONGKHA_INSTRUCTION if is_dzongkha(question) else ""),
         })
         with self.llm.messages.stream(
             model=self.model,
@@ -132,10 +152,12 @@ class LegalAidRAG:
             yield {"type": "done", "text": text, "verified": True, "cited": []}
             return
 
+        footer = DISCLAIMER + (DZONGKHA_NOTE if is_dzongkha(question) else "")
         context = build_context(hits)
         messages = list(history or [])
         messages.append({"role": "user",
-                         "content": f"{context}\n\nQUESTION: {question}"})
+                         "content": f"{context}\n\nQUESTION: {question}"
+                                    + (DZONGKHA_INSTRUCTION if is_dzongkha(question) else "")})
         parts = []
         with self.llm.messages.stream(
             model=self.model,
@@ -173,12 +195,13 @@ class LegalAidRAG:
                 text = ("I couldn't produce a reliably cited answer to this "
                         "question. Please rephrase, or consult the Bhutan "
                         "National Legal Institute's Legal Aid Center.")
-            yield {"type": "replace", "text": text + DISCLAIMER}
-        yield {"type": "done", "text": text + DISCLAIMER,
+            yield {"type": "replace", "text": text + footer}
+        yield {"type": "done", "text": text + footer,
                "verified": ok, "cited": cited}
 
     def ask(self, question: str, history: list[dict] | None = None,
             k: int = 6) -> Answer:
+        footer = DISCLAIMER + (DZONGKHA_NOTE if is_dzongkha(question) else "")
         hits = retrieve(self.store, self.embedder, question, k=k)
         if not hits:
             return Answer(
@@ -204,5 +227,5 @@ class LegalAidRAG:
                          "National Legal Institute's Legal Aid Center." + DISCLAIMER,
                     sources=hits, verified=False,
                 )
-        return Answer(text=text + DISCLAIMER, sources=hits,
+        return Answer(text=text + footer, sources=hits,
                       cited=cited, verified=True)

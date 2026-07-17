@@ -137,6 +137,40 @@ single-method interfaces precisely so a fine-tuned Dzongkha model can be
 dropped in later. Note: browsers require HTTPS (or localhost) for
 microphone access — put the app behind TLS in production.
 
-Roadmap remaining (Phase 5): weekly re-crawl for amendments, larger
-legally-reviewed eval set, Telegram/WhatsApp channel, Dzongkha text
-support behind native-speaker evaluation.
+### Running Phase 5 (hardening & reach)
+
+**Keeping the corpus current** — one command re-crawls the official sources,
+and only if a new or amended PDF appeared does it rebuild the corpus and
+re-index (unchanged documents are never re-downloaded thanks to the SHA-256
+manifest):
+
+```bash
+python -m ingest.pipeline update
+# weekly cron:
+# 0 3 * * 1  cd /srv/legalaid && python -m ingest.pipeline update >> update.log 2>&1
+```
+
+**Telegram bot** — the same cited-answer pipeline over Telegram (voice notes
+included when `OPENAI_API_KEY` is set):
+
+```bash
+export TELEGRAM_BOT_TOKEN=123:abc   # from @BotFather
+python -m app.telegram
+```
+
+**Feedback → evaluation loop** — export every 👎-voted answer with its
+question for legal review; confirmed problems become new entries in
+`eval/questions.jsonl`:
+
+```bash
+python -m rag.cli export-feedback   # -> eval/review_queue.jsonl
+```
+
+**Dzongkha text (experimental)** — questions written in Dzongkha script are
+answered in Dzongkha (Act names and section numbers stay in English, same
+citation rules), and every such answer carries an explicit experimental
+warning. This stays experimental until evaluated by native speakers;
+Dzongkha *speech* remains a research track needing transcribed audio data.
+
+Still open (needs partners, not code): legal review of the eval set with
+BNLI/OAG, native-speaker Dzongkha evaluation, and OCR for scanned PDFs.

@@ -70,6 +70,27 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    """Re-crawl -> rebuild corpus -> re-index. Run weekly (cron) so new Acts
+    and amendments flow into the chatbot automatically. The crawler's
+    SHA-256 manifest means unchanged PDFs are never re-downloaded."""
+    raw_dir = Path(args.raw_dir)
+    changed = 0
+    for source in SOURCES:
+        print(f"== {source.name}")
+        summary = crawl_source(source, raw_dir)
+        print(f"   {summary}")
+        changed += summary["downloaded"]
+    if not changed and not args.force:
+        print("no new or amended documents; index left untouched")
+        return 0
+    rc = cmd_build(argparse.Namespace(raw_dir=args.raw_dir, out=args.out))
+    if rc != 0:
+        return rc
+    from rag.cli import cmd_index  # late import: rag is optional for pure crawling
+    return cmd_index(argparse.Namespace(corpus=args.out, db=args.db))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ingest.pipeline", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -84,6 +105,15 @@ def main(argv: list[str] | None = None) -> int:
     p_build.add_argument("--raw-dir", default="corpus/raw")
     p_build.add_argument("--out", default="corpus/chunks.jsonl")
     p_build.set_defaults(func=cmd_build)
+
+    p_update = sub.add_parser(
+        "update", help="re-crawl, rebuild corpus and re-index if anything changed")
+    p_update.add_argument("--raw-dir", default="corpus/raw")
+    p_update.add_argument("--out", default="corpus/chunks.jsonl")
+    p_update.add_argument("--db", default="corpus/index.db")
+    p_update.add_argument("--force", action="store_true",
+                          help="rebuild even when the crawl found nothing new")
+    p_update.set_defaults(func=cmd_update)
 
     args = parser.parse_args(argv)
     return args.func(args)
