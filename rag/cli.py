@@ -23,8 +23,12 @@ from .store import Store, index_corpus
 
 def cmd_index(args) -> int:
     embedder = embedder_from_env()
-    if Path(args.db).exists():
-        Path(args.db).unlink()
+    # Remove the old index plus its WAL sidecars — a stale -wal/-shm pair
+    # next to a freshly created database is a corruption hazard.
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(args.db) + suffix)
+        if p.exists():
+            p.unlink()
     n = index_corpus(args.corpus, args.db, embedder)
     print(f"indexed {n} chunks into {args.db} (embedder: {embedder.name})")
     return 0
@@ -46,6 +50,8 @@ def cmd_eval(args) -> int:
     answering pipeline and have a fresh Claude context grade each answer
     (needs ANTHROPIC_API_KEY; writes a JSONL report)."""
     store, embedder = Store(args.db), embedder_from_env()
+    from .store import check_embedder
+    check_embedder(store, embedder)
     questions = [json.loads(l) for l in Path(args.questions).read_text().splitlines()
                  if l.strip() and not l.startswith("//")]
 

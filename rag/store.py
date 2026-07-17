@@ -148,6 +148,27 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
 
+    def embedder_name(self) -> str | None:
+        row = self.db.execute("SELECT value FROM meta WHERE key='embedder'").fetchone()
+        return row[0] if row else None
+
+
+def check_embedder(store: Store, embedder) -> None:
+    """Fail loudly when the query embedder differs from the index embedder.
+
+    Happens in practice when VOYAGE_API_KEY appears (or disappears) after the
+    index was built: query vectors would live in a different space — and a
+    different dimension — than the indexed ones, crashing or silently
+    returning garbage.
+    """
+    indexed = store.embedder_name()
+    if indexed is not None and indexed != embedder.name:
+        raise RuntimeError(
+            f"index was built with embedder '{indexed}' but queries would use "
+            f"'{embedder.name}'. Re-run `python -m rag.cli index` (or restore "
+            f"the matching *_API_KEY environment).")
+
+
 def index_corpus(jsonl_path: str | Path, db_path: str | Path, embedder) -> int:
     """Load corpus/chunks.jsonl into a fresh index with embeddings."""
     chunks = [json.loads(line) for line in Path(jsonl_path).read_text().splitlines() if line.strip()]

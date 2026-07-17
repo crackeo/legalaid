@@ -7,10 +7,15 @@ tracking. purge_older_than() implements the retention policy.
 """
 
 import json
+import re
 import sqlite3
 import time
 import uuid
 from pathlib import Path
+
+# The disclaimer / experimental-note footer appended to every answer. It is
+# for readers, not for the model — strip it from history replayed to Claude.
+_FOOTER_RE = re.compile(r"\n*---\n\*.*$", re.S)
 
 
 class SessionStore:
@@ -66,12 +71,19 @@ class SessionStore:
         return cur.lastrowid
 
     def history(self, sid: str, max_turns: int = 10) -> list[dict]:
-        """Recent turns in Claude messages format (role/content only)."""
+        """Recent turns in Claude messages format (role/content only).
+
+        Assistant turns are replayed without the disclaimer footer — it's
+        boilerplate for readers that would otherwise ride along (and get
+        re-tokenised) on every follow-up request.
+        """
         rows = self.db.execute(
             "SELECT role, content FROM messages WHERE session_id = ?"
             " ORDER BY id DESC LIMIT ?", (sid, max_turns * 2),
         ).fetchall()
-        return [{"role": r, "content": c} for r, c in reversed(rows)]
+        return [{"role": r,
+                 "content": _FOOTER_RE.sub("", c) if r == "assistant" else c}
+                for r, c in reversed(rows)]
 
     def messages(self, sid: str) -> list[dict]:
         """Full messages with metadata, for rendering a reloaded session."""

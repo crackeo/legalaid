@@ -294,6 +294,18 @@ only access key to a conversation; prompt-injection attempts via questions
 are constrained by the grounding rules plus programmatic citation
 verification; PDFs are parsed from official government sources only.
 
+### Phase 11 (correctness review & bug fixes)
+
+An adversarial re-read of all ten phases found and fixed five defects:
+
+| Defect | Fix |
+|---|---|
+| Feedback 👍/👎 buttons never rendered when an answer had sources (looked up the wrong DOM element) | Buttons attach to the answer bubble directly |
+| Changing embedding backends after indexing (e.g. adding `VOYAGE_API_KEY` later) crashed or silently degraded retrieval | Index records its embedder; a mismatch at query time fails loudly with the remedy |
+| Re-indexing left stale SQLite `-wal`/`-shm` sidecars next to the fresh database | `rag.cli index` removes them |
+| `[n]` markers in conversation history refer to *previous* turns' provisions but still passed verification | System prompt instructs re-deriving citations from the current provisions only |
+| Disclaimer footers were re-sent to Claude with every follow-up (wasted tokens); Dzongkha note missing on the no-results path | History replay strips footers (UI display unaffected); all paths carry the right footer |
+
 Still open (needs partners, not code): legal review of the eval set with
 BNLI/OAG, native-speaker Dzongkha evaluation, and the Dzongkha speech
 data-collection track.

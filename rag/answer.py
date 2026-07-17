@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from .retrieve import retrieve
-from .store import Hit, Store
+from .store import Hit, Store, check_embedder
 
 MODEL = "claude-opus-4-8"
 
@@ -42,6 +42,9 @@ Rules, in priority order:
    domestic violence also RENEW and the NCWC helpline.
 6. Answer in clear, plain language a non-lawyer can follow. Quote the exact
    statutory words for the load-bearing part. Be concise.
+7. In multi-turn conversations, [n] markers in earlier turns refer to the
+   provisions supplied with THOSE turns. Cite only from the PROVISIONS list
+   in the current request; re-derive every citation fresh.
 """
 
 _CITATION_RE = re.compile(r"\[(\d{1,2})\]")
@@ -99,6 +102,7 @@ class LegalAidRAG:
     """retrieve -> prompt -> Claude -> verify -> answer with disclaimer."""
 
     def __init__(self, store: Store, embedder, llm=None, model: str = MODEL):
+        check_embedder(store, embedder)
         self.store = store
         self.embedder = embedder
         self.model = model
@@ -140,6 +144,7 @@ class LegalAidRAG:
         {"type": "replace", ...} event tells the client to swap the shown
         text for the safe version — so nothing unverified is ever final.
         """
+        footer = DISCLAIMER + (DZONGKHA_NOTE if is_dzongkha(question) else "")
         hits = retrieve(self.store, self.embedder, question, k=k)
         yield {"type": "sources", "sources": [
             {"n": i, "doc_title": h.doc_title, "section": h.section_number,
@@ -147,12 +152,11 @@ class LegalAidRAG:
             for i, h in enumerate(hits, start=1)
         ]}
         if not hits:
-            text = "I don't find this in the laws available to me." + DISCLAIMER
+            text = "I don't find this in the laws available to me." + footer
             yield {"type": "replace", "text": text}
             yield {"type": "done", "text": text, "verified": True, "cited": []}
             return
 
-        footer = DISCLAIMER + (DZONGKHA_NOTE if is_dzongkha(question) else "")
         context = build_context(hits)
         messages = list(history or [])
         messages.append({"role": "user",
@@ -205,7 +209,7 @@ class LegalAidRAG:
         hits = retrieve(self.store, self.embedder, question, k=k)
         if not hits:
             return Answer(
-                text="I don't find this in the laws available to me." + DISCLAIMER,
+                text="I don't find this in the laws available to me." + footer,
                 sources=[], verified=True,
             )
         text = self._call_llm(question, build_context(hits), history)
