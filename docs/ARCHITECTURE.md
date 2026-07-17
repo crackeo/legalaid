@@ -1,5 +1,14 @@
 # Bhutan Legal Aid AI — System Architecture
 
+> **Status: this was the design document; the system is now built.** Where
+> implementation diverged, the "As built" notes below are authoritative —
+> the main differences are that the vector store is **SQLite (FTS5 + numpy
+> cosine)** instead of Postgres/pgvector, reranking is **reciprocal rank
+> fusion** without a cross-encoder stage, and the roadmap grew from five
+> phases to eleven (WhatsApp, admin dashboard, LLM-graded eval, security
+> and correctness audits). See the README for the as-built run guide per
+> phase and `CLAUDE.md` for the repo map.
+
 This document answers three questions:
 
 1. **Where do Bhutan's laws live online, and how do we get them?**
@@ -95,12 +104,19 @@ sections in context → answer with citations → guardrails → user
   data + vectors, simplest ops) or **Qdrant** if you want a dedicated store.
   The corpus is small by vector-DB standards (~150 Acts ≈ tens of thousands
   of chunks) — anything works; choose for operational simplicity.
+  *As built:* even simpler — a single SQLite file (`rag/store.py`) holding
+  chunks, an FTS5 index for BM25, and embedding vectors scored with numpy
+  cosine. Zero infrastructure; swap for pgvector behind the same `Store`
+  interface if the corpus ever outgrows it.
 - **Hybrid retrieval**: combine vector similarity with **BM25 keyword
   search**. Legal queries are full of exact terms of art ("nangi zhib",
   "felony of the fourth degree", "Section 410") where keyword search beats
   embeddings. Fuse with reciprocal-rank fusion, retrieve top ~20, then
   **rerank** (e.g. Cohere Rerank or a cross-encoder) down to the ~6 best
   sections that actually go into the prompt.
+  *As built:* fusion is reciprocal rank fusion only (`rag/retrieve.py`);
+  a cross-encoder rerank stage remains a future upgrade if eval shows
+  retrieval as the bottleneck.
 - **LLM**: Claude (Anthropic API) is a strong fit for legal reasoning and
   long context; the system prompt must instruct it to:
   1. answer **only** from the provided sections,
@@ -188,7 +204,7 @@ Voice = STT (speech → text) + the same chat pipeline + TTS (text → speech).
 |---|---|---|
 | Ingestion | Python, httpx, BeautifulSoup, PyMuPDF, Tesseract | standard, boring, reliable |
 | Corpus store | JSONL in object storage / repo | rebuildable, diffable, auditable |
-| Vector + app DB | Postgres + pgvector | one database to operate |
+| Vector + app DB | Postgres + pgvector *(as built: SQLite — FTS5 + numpy)* | one database to operate |
 | Keyword search | Postgres full-text or Elasticsearch/Meilisearch | hybrid retrieval |
 | Backend | FastAPI | async, SSE streaming, Python ML ecosystem |
 | LLM | Claude API | legal reasoning, long context, citations |
