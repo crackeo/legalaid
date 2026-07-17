@@ -20,7 +20,7 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,7 @@ from rag.embed import embedder_from_env
 from rag.store import Store
 
 from .sessions import SessionStore
+from .voice import MAX_AUDIO_BYTES, MAX_SPEAK_CHARS, speech_text, stt_from_env, tts_from_env
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_QUESTION_CHARS = 4000
@@ -39,6 +40,10 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
+class SpeakRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_SPEAK_CHARS * 2)
+
+
 class FeedbackRequest(BaseModel):
     message_id: int
     vote: int = Field(ge=-1, le=1)
@@ -46,9 +51,14 @@ class FeedbackRequest(BaseModel):
 
 
 def create_app(rag: LegalAidRAG | None = None,
-               sessions: SessionStore | None = None) -> FastAPI:
+               sessions: SessionStore | None = None,
+               stt=None, tts=None) -> FastAPI:
     app = FastAPI(title="Bhutan Legal Aid AI")
 
+    if stt is None:
+        stt = stt_from_env()
+    if tts is None:
+        tts = tts_from_env()
     if rag is None:
         index_db = os.environ.get("LEGALAID_INDEX_DB", "corpus/index.db")
         rag = LegalAidRAG(Store(index_db), embedder_from_env())
@@ -103,6 +113,37 @@ def create_app(rag: LegalAidRAG | None = None,
     def feedback(req: FeedbackRequest):
         sessions.add_feedback(req.message_id, req.vote, req.comment)
         return {"ok": True}
+
+    @app.get("/api/voice/config")
+    def voice_config():
+        return {"stt": stt is not None, "tts": tts is not None}
+
+    @app.post("/api/voice/transcribe")
+    async def transcribe(audio: UploadFile):
+        if stt is None:
+            raise HTTPException(503, "voice is not configured (set OPENAI_API_KEY)")
+        data = await audio.read()
+        if not data:
+            raise HTTPException(422, "empty audio")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "audio too large")
+        try:
+            text = stt.transcribe(data, mime=audio.content_type or "audio/webm")
+        except Exception:
+            raise HTTPException(502, "transcription failed, please try again")
+        if not text:
+            raise HTTPException(422, "could not hear a question in the audio")
+        return {"text": text}
+
+    @app.post("/api/voice/speak")
+    def speak(req: SpeakRequest):
+        if tts is None:
+            raise HTTPException(503, "voice is not configured (set OPENAI_API_KEY)")
+        try:
+            audio = tts.synthesize(speech_text(req.text))
+        except Exception:
+            raise HTTPException(502, "speech synthesis failed, please try again")
+        return Response(content=audio, media_type="audio/mpeg")
 
     @app.get("/")
     def index():

@@ -114,4 +114,29 @@ Privacy: no accounts, no tracking; sessions live in a local SQLite file and
 `LEGALAID_INDEX_DB` (default `corpus/index.db`), `LEGALAID_SESSIONS_DB`
 (default `corpus/sessions.db`).
 
-Next: Phase 4 — voice (push-to-talk mic → Whisper STT → this pipeline → TTS).
+### Running Phase 4 (voice)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # answers (Claude)
+export OPENAI_API_KEY=sk-...          # voice (Whisper STT + TTS)
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+With `OPENAI_API_KEY` set, the chat UI shows a 🎤 button: click to record,
+click again to stop — the audio is transcribed by Whisper, the question runs
+through the normal cited-answer pipeline, and the answer is read aloud
+(citation markers and the markdown footer are stripped for speech, replaced
+by one short spoken disclaimer). Every answer also gets a 🔊 replay button,
+and a "read answers aloud" toggle controls auto-playback. Without the key,
+voice endpoints return 503 and the UI simply hides the mic — text chat is
+unaffected.
+
+Voice is **English-only for now**. Dzongkha speech is a research track (no
+mainstream model supports it) — the STT/TTS backends in `app/voice.py` are
+single-method interfaces precisely so a fine-tuned Dzongkha model can be
+dropped in later. Note: browsers require HTTPS (or localhost) for
+microphone access — put the app behind TLS in production.
+
+Roadmap remaining (Phase 5): weekly re-crawl for amendments, larger
+legally-reviewed eval set, Telegram/WhatsApp channel, Dzongkha text
+support behind native-speaker evaluation.

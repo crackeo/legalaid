@@ -51,6 +51,15 @@
                 border-radius: var(--radius); padding: 0 1.3rem; font: inherit;
                 cursor: pointer; }
   button.send:disabled { opacity: .5; cursor: default; }
+  button.mic { background: var(--panel); border: 1px solid var(--border);
+               border-radius: var(--radius); padding: 0 .95rem; font-size: 1.15rem;
+               cursor: pointer; display: none; }
+  button.mic.rec { background: #c0392b; border-color: #c0392b; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .voice-toggle { display: none; align-items: center; gap: .35rem;
+                  font-size: .8rem; color: var(--muted); }
+  .speak-btn { border: 1px solid var(--border); background: none; color: var(--muted);
+               border-radius: 8px; padding: .1rem .5rem; cursor: pointer; font-size: .85rem; }
   .notice { font-size: .78rem; color: var(--muted); text-align: center;
             padding: 0 1.4rem 1rem; }
   .thinking { color: var(--muted); font-style: italic; }
@@ -67,8 +76,12 @@
 <form id="form">
   <textarea id="input" rows="2" required maxlength="4000"
     placeholder="Ask about Bhutan's laws — e.g. “What is the penalty for defamation?”"></textarea>
+  <button class="mic" id="mic" type="button" title="Ask by voice (click to record, click again to stop)">🎤</button>
   <button class="send" id="send" type="submit">Ask</button>
 </form>
+<label class="voice-toggle" id="voiceToggle" style="justify-content:center">
+  <input type="checkbox" id="autoSpeak"> read answers aloud
+</label>
 <p class="notice">Legal information, not legal advice. For your specific case contact the
 Bhutan National Legal Institute’s Legal Aid Center or a licensed Jabmi.</p>
 
@@ -173,6 +186,7 @@ form.addEventListener('submit', async (e) => {
           bot.classList.remove('thinking');
           bot.textContent = ev.text;
           cited = ev.cited;
+          maybeSpeak(ev.text, bot);
         } else if (ev.type === 'saved') {
           renderSources(sources, cited);
           renderFeedback(ev.message_id);
@@ -187,6 +201,89 @@ form.addEventListener('submit', async (e) => {
     input.focus();
   }
 });
+
+// ---- Voice: push-to-talk mic (Whisper STT) + spoken answers (TTS) ----
+const mic = document.getElementById('mic');
+const voiceToggle = document.getElementById('voiceToggle');
+const autoSpeak = document.getElementById('autoSpeak');
+let recorder = null, recChunks = [], ttsAvailable = false, currentAudio = null;
+
+(async () => {
+  try {
+    const cfg = await (await fetch('/api/voice/config')).json();
+    ttsAvailable = cfg.tts;
+    if (cfg.stt && navigator.mediaDevices?.getUserMedia) mic.style.display = 'block';
+    if (cfg.tts) voiceToggle.style.display = 'flex';
+  } catch {}
+})();
+
+mic.addEventListener('click', async () => {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recChunks = [];
+    recorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''});
+    recorder.ondataavailable = (e) => recChunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      mic.classList.remove('rec');
+      mic.textContent = '🎤';
+      const blob = new Blob(recChunks, {type: recorder.mimeType || 'audio/webm'});
+      if (blob.size < 1000) return; // too short to be a question
+      input.placeholder = 'Transcribing…';
+      const fd = new FormData();
+      fd.append('audio', blob, 'question.webm');
+      try {
+        const resp = await fetch('/api/voice/transcribe', {method: 'POST', body: fd});
+        if (!resp.ok) throw new Error();
+        const {text} = await resp.json();
+        input.value = text;
+        if (ttsAvailable) autoSpeak.checked = true;  // spoken question → spoken answer
+        form.requestSubmit();
+      } catch {
+        input.placeholder = 'Could not transcribe — please try again or type.';
+      } finally {
+        setTimeout(() => { input.placeholder = 'Ask about Bhutan’s laws…'; }, 4000);
+      }
+    };
+    recorder.start();
+    mic.classList.add('rec');
+    mic.textContent = '⏹';
+  } catch {
+    mic.title = 'Microphone unavailable or permission denied';
+  }
+});
+
+async function speak(text, button) {
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (button) button.disabled = true;
+  try {
+    const resp = await fetch('/api/voice/speak', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    if (!resp.ok) return;
+    const url = URL.createObjectURL(await resp.blob());
+    currentAudio = new Audio(url);
+    currentAudio.onended = () => URL.revokeObjectURL(url);
+    await currentAudio.play();
+  } catch {} finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function maybeSpeak(text, bubbleEl) {
+  if (!ttsAvailable) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'speak-btn';
+  btn.textContent = '🔊';
+  btn.title = 'Read this answer aloud';
+  btn.onclick = () => speak(text, btn);
+  bubbleEl.appendChild(document.createTextNode(' '));
+  bubbleEl.appendChild(btn);
+  if (autoSpeak.checked) speak(text, btn);
+}
 
 // Restore a previous session's messages on reload.
 (async () => {
