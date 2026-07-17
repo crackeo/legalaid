@@ -26,7 +26,8 @@ import httpx
 
 from rag.answer import LegalAidRAG
 
-from .telegram import MAX_HISTORY_TURNS, WELCOME, format_reply
+from .telegram import (MAX_QUESTION_CHARS, WELCOME, ChatHistories,
+                       format_reply)
 
 GRAPH = "https://graph.facebook.com/v21.0"
 _SEEN_MAX = 2048  # Meta re-delivers on slow/failed acks; dedupe by message id
@@ -75,7 +76,7 @@ class WhatsAppBot:
         self.rag = rag
         self.client = client
         self.stt = stt
-        self._histories: dict[str, list[dict]] = {}
+        self._histories = ChatHistories()
         self._seen: OrderedDict[str, None] = OrderedDict()
 
     def _dedupe(self, message_id: str) -> bool:
@@ -114,10 +115,11 @@ class WhatsAppBot:
             return
         if not question:
             return
+        question = question[:MAX_QUESTION_CHARS]
         if question.lower() in ("hi", "hello", "start", "help", "kuzu zangpo"):
             self.client.send_text(sender, WELCOME)
             return
-        history = self._histories.get(sender, [])
+        history = self._histories.get_history(sender)
         try:
             answer = self.rag.ask(question, history=history)
         except Exception:
@@ -125,9 +127,9 @@ class WhatsAppBot:
                                           "please try again in a moment.")
             return
         self.client.send_text(sender, format_reply(answer))
-        history = history + [{"role": "user", "content": question},
-                             {"role": "assistant", "content": answer.text}]
-        self._histories[sender] = history[-MAX_HISTORY_TURNS * 2:]
+        self._histories.set_history(
+            sender, history + [{"role": "user", "content": question},
+                               {"role": "assistant", "content": answer.text}])
 
     def handle_payload(self, payload: dict) -> int:
         """Process a full webhook payload; returns messages handled."""

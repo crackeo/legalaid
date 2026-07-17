@@ -84,6 +84,11 @@ class SessionStore:
                  "verified": None if v is None else bool(v)}
                 for i, r, c, s, v in rows]
 
+    def message_exists(self, message_id: int) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM messages WHERE id = ?", (message_id,)
+        ).fetchone() is not None
+
     def add_feedback(self, message_id: int, vote: int, comment: str = "") -> None:
         self.db.execute(
             "INSERT INTO feedback (message_id, vote, comment, created_at)"

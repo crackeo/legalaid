@@ -108,14 +108,28 @@ function renderSources(sources, cited) {
   if (!sources.length) return;
   const div = document.createElement('div');
   div.className = 'sources';
-  const parts = sources.filter(s => !cited || cited.includes(s.n)).map(s => {
+  // Built with DOM nodes only: doc titles and URLs originate from crawled
+  // PDF link text and must be treated as untrusted markup.
+  div.appendChild(document.createTextNode('Sources: '));
+  const shown = sources.filter(s => !cited || cited.includes(s.n));
+  if (!shown.length) return;
+  shown.forEach((s, i) => {
+    if (i > 0) div.appendChild(document.createTextNode(' · '));
     const label = `[${s.n}] ${s.doc_title} §${s.section}, p.${s.page}`;
-    return s.source_url
-      ? `<a href="${s.source_url}" target="_blank" rel="noopener">${label}</a>`
-      : label;
+    let url = null;
+    try {
+      const u = new URL(s.source_url);
+      if (u.protocol === 'https:' || u.protocol === 'http:') url = u.href;
+    } catch {}
+    if (url) {
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = label;
+      div.appendChild(a);
+    } else {
+      div.appendChild(document.createTextNode(label));
+    }
   });
-  if (!parts.length) return;
-  div.innerHTML = 'Sources: ' + parts.join(' · ');
   chat.appendChild(div);
 }
 

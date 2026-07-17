@@ -274,6 +274,26 @@ pull request.
 errors, 5xx) three times with exponential backoff; 4xx responses are not
 retried. A flaky government server no longer costs the corpus a document.
 
+### Phase 10 (security audit & fixes)
+
+A full audit of the attack surface (web API, both bot channels, crawler,
+browser UI) found and fixed seven issues:
+
+| Finding | Fix |
+|---|---|
+| XSS: source titles/URLs (from crawled PDF link text) reached the DOM via `innerHTML` | Sources rendered with DOM nodes only; links restricted to http(s) URLs |
+| Rate-limit bypass: `X-Forwarded-For` trusted unconditionally (spoofable without a proxy) | Header honoured only with `LEGALAID_TRUST_PROXY=1` — set it when behind nginx/Caddy |
+| Feedback abuse: unlimited, unvalidated writes | Rate-limited; `message_id` must exist; vote must be ±1 |
+| Memory DoS: unbounded per-chat histories in Telegram/WhatsApp bots | LRU cap (5000 chats) |
+| Unbounded bot questions | Capped at 4000 chars (matches web API) |
+| No browser hardening headers | CSP, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy` on every response |
+| WhatsApp signature check silently optional | Loud startup warning when `WHATSAPP_APP_SECRET` is unset |
+
+Notes that remain true by design: session IDs are unguessable UUIDs and the
+only access key to a conversation; prompt-injection attempts via questions
+are constrained by the grounding rules plus programmatic citation
+verification; PDFs are parsed from official government sources only.
+
 Still open (needs partners, not code): legal review of the eval set with
 BNLI/OAG, native-speaker Dzongkha evaluation, and the Dzongkha speech
 data-collection track.

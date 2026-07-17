@@ -70,11 +70,16 @@ def create_app(rag: LegalAidRAG | None = None,
         limiter = RateLimiter(
             per_minute=int(os.environ.get("LEGALAID_RATE_LIMIT", "20")))
 
+    # X-Forwarded-For is client-controlled unless a reverse proxy sets it;
+    # trusting it unconditionally would let anyone rotate fake IPs past the
+    # rate limiter. Only honour it when the operator says a proxy is in front.
+    trust_proxy = os.environ.get("LEGALAID_TRUST_PROXY") == "1"
+
     def check_rate(request: Request) -> None:
-        # Honour the first X-Forwarded-For hop when behind a reverse proxy.
-        fwd = request.headers.get("x-forwarded-for", "")
-        client = fwd.split(",")[0].strip() or (
-            request.client.host if request.client else "unknown")
+        client = request.client.host if request.client else "unknown"
+        if trust_proxy:
+            fwd = request.headers.get("x-forwarded-for", "")
+            client = fwd.split(",")[0].strip() or client
         if not limiter.allow(client):
             raise HTTPException(
                 429, "Too many requests — please wait a minute and try again.")
@@ -89,6 +94,20 @@ def create_app(rag: LegalAidRAG | None = None,
     if sessions is None:
         sessions_db = os.environ.get("LEGALAID_SESSIONS_DB", "corpus/sessions.db")
         sessions = SessionStore(sessions_db)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "media-src 'self' blob:; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
 
     def sse(event: dict) -> str:
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -143,7 +162,12 @@ def create_app(rag: LegalAidRAG | None = None,
         return {"session_id": sid, "messages": sessions.messages(sid)}
 
     @app.post("/api/feedback")
-    def feedback(req: FeedbackRequest):
+    def feedback(req: FeedbackRequest, request: Request):
+        check_rate(request)
+        if req.vote not in (-1, 1):
+            raise HTTPException(422, "vote must be 1 or -1")
+        if not sessions.message_exists(req.message_id):
+            raise HTTPException(404, "unknown message")
         sessions.add_feedback(req.message_id, req.vote, req.comment)
         return {"ok": True}
 
@@ -199,6 +223,10 @@ def create_app(rag: LegalAidRAG | None = None,
     wa_app_secret = os.environ.get("WHATSAPP_APP_SECRET", "")
 
     if whatsapp is not None:
+        if not wa_app_secret:
+            log.warning(
+                "WhatsApp webhook is enabled WITHOUT signature verification — "
+                "set WHATSAPP_APP_SECRET so forged webhook posts are rejected.")
 
         @app.get("/api/whatsapp/webhook")
         def whatsapp_verify(request: Request):
