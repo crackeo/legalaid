@@ -250,6 +250,30 @@ retries slow webhooks), deduplicates re-delivered messages, and — with the
 app secret set — rejects any request whose `X-Hub-Signature-256` HMAC
 doesn't verify. Unconfigured deployments don't expose the endpoint at all.
 
+### Running Phase 9 (quality assurance & CI)
+
+**LLM-graded answer evaluation** — beyond retrieval hit-rate, grade the
+actual answers: a fresh Claude context acts as a strict examiner, checking
+each answer for groundedness, citation correctness, completeness and
+clarity against the very provisions it cited:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python -m rag.cli eval --grade        # -> eval/graded_report.jsonl
+```
+
+Failed grades are a triage signal for the human legal review queue, not a
+replacement for it — review `fail` answers first. Run before every deploy
+and after every corpus update.
+
+**CI** — `.github/workflows/ci.yml` runs the full test suite (58 tests,
+including real-tesseract OCR) on Python 3.11 and 3.12 for every push and
+pull request.
+
+**Crawler hardening** — downloads now retry transient failures (network
+errors, 5xx) three times with exponential backoff; 4xx responses are not
+retried. A flaky government server no longer costs the corpus a document.
+
 Still open (needs partners, not code): legal review of the eval set with
 BNLI/OAG, native-speaker Dzongkha evaluation, and the Dzongkha speech
 data-collection track.

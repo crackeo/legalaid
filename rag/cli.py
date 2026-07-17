@@ -42,12 +42,22 @@ def cmd_ask(args) -> int:
 
 
 def cmd_eval(args) -> int:
-    """Retrieval hit-rate: for each question, is a chunk from the expected
-    document (and section, if given) in the top-k?"""
+    """Retrieval hit-rate (no API key), plus optional --grade: run the full
+    answering pipeline and have a fresh Claude context grade each answer
+    (needs ANTHROPIC_API_KEY; writes a JSONL report)."""
     store, embedder = Store(args.db), embedder_from_env()
     questions = [json.loads(l) for l in Path(args.questions).read_text().splitlines()
                  if l.strip() and not l.startswith("//")]
+
+    rag = grades = None
+    if args.grade:
+        from .answer import LegalAidRAG
+        from .grade import grade_answer
+        rag = LegalAidRAG(store, embedder)
+        grades = []
+
     hits_at_k = 0
+    report = []
     for q in questions:
         results = retrieve(store, embedder, q["question"], k=args.k)
         found = any(
@@ -56,11 +66,32 @@ def cmd_eval(args) -> int:
             for h in results
         )
         hits_at_k += found
-        print(f"{'PASS' if found else 'MISS'}  {q['question'][:70]}")
+        line = f"{'PASS' if found else 'MISS'}  {q['question'][:70]}"
+        entry = {"question": q["question"], "retrieval_hit": found}
+        if rag is not None:
+            answer = rag.ask(q["question"])
+            grade = grade_answer(rag.llm, q["question"], answer.text, answer.sources)
+            grades.append(grade.verdict)
+            line += f"  [answer: {grade.verdict}]"
+            entry.update(answer=answer.text, verified=answer.verified,
+                         grade=grade.verdict, issues=grade.issues)
+        print(line)
+        report.append(entry)
+
     total = len(questions)
     print(f"\nretrieval hit-rate@{args.k}: {hits_at_k}/{total} "
           f"({100 * hits_at_k / max(total, 1):.0f}%)")
-    return 0 if hits_at_k == total else 1
+    ok = hits_at_k == total
+    if grades is not None:
+        passed = grades.count("pass")
+        print(f"answer grades: {passed}/{total} pass "
+              f"({grades.count('fail')} fail, {grades.count('error')} error)")
+        ok = ok and passed == total
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(
+            "\n".join(json.dumps(e, ensure_ascii=False) for e in report) + "\n")
+        print(f"report written to {args.report}")
+    return 0 if ok else 1
 
 
 def cmd_export_feedback(args) -> int:
@@ -111,6 +142,9 @@ def main(argv=None) -> int:
     p.add_argument("--questions", default="eval/questions.jsonl")
     p.add_argument("--db", default="corpus/index.db")
     p.add_argument("--k", type=int, default=6)
+    p.add_argument("--grade", action="store_true",
+                   help="also run and LLM-grade full answers (needs ANTHROPIC_API_KEY)")
+    p.add_argument("--report", default="eval/graded_report.jsonl")
     p.set_defaults(func=cmd_eval)
 
     p = sub.add_parser("export-feedback",

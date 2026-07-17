@@ -35,11 +35,33 @@ def _throttle(url: str) -> None:
     _last_request_at[host] = time.monotonic()
 
 
+RETRIES = 3          # retry transient failures: network errors and 5xx
+RETRY_BASE_DELAY = 2.0
+
+
 def _get(client: httpx.Client, url: str) -> httpx.Response:
-    _throttle(url)
-    resp = client.get(url, follow_redirects=True, timeout=TIMEOUT)
-    resp.raise_for_status()
-    return resp
+    """GET with throttling and exponential-backoff retries.
+
+    Government servers flake; a transient 500 or dropped connection should
+    not lose a document from the corpus. 4xx responses are not retried —
+    a 404 today will be a 404 in eight seconds too.
+    """
+    delay = RETRY_BASE_DELAY
+    for attempt in range(RETRIES + 1):
+        _throttle(url)
+        try:
+            resp = client.get(url, follow_redirects=True, timeout=TIMEOUT)
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500 or attempt == RETRIES:
+                raise
+        except httpx.TransportError:
+            if attempt == RETRIES:
+                raise
+        print(f"  retry {attempt + 1}/{RETRIES} in {delay:.0f}s: {url}")
+        time.sleep(delay)
+        delay *= 2
 
 
 def find_pdf_links(html: str, page_url: str, same_host_only: bool = True) -> list[dict]:
