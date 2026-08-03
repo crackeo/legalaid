@@ -22,7 +22,10 @@ from types import SimpleNamespace
 import httpx
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+# Floating alias -> always the current model; concrete names like
+# "gemini-2.5-flash" get retired for new accounts. Flash-tier because
+# free-tier keys have little/no pro-model quota (pro 429s immediately).
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 
 # Gemini finish reasons that mean "declined", mapped to Claude's "refusal".
 _GEMINI_REFUSALS = {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"}
