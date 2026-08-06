@@ -98,5 +98,7 @@ def test_health_not_rate_limited(limited_client):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["chunks"] == len(CORPUS)
+    assert body["corpus_ready"] is True
     assert body["embedder"] == "hash-v1"
+    assert body["backend"] == "claude"          # FakeStreamingLLM stands in for Claude
     assert body["voice"] == {"stt": False, "tts": False}

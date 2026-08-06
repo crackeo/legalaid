@@ -103,3 +103,43 @@ def test_llm_from_env_selection(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     import anthropic
     assert isinstance(llm_from_env(), anthropic.Anthropic)  # Claude wins
+
+
+def test_health_reports_gemini_backend(tmp_path):
+    """A Gemini deployment must not report a Claude model name — that field
+    is the ops signal for which backend is actually answering."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.sessions import SessionStore
+
+    corpus_file = tmp_path / "chunks.jsonl"
+    corpus_file.write_text("\n".join(json.dumps(c) for c in CORPUS))
+    index_corpus(corpus_file, tmp_path / "index.db", HashEmbedder())
+    llm = GeminiLLM(api_key="k", model="gemini-flash-latest",
+                    transport=gemini_transport(reply_text="x [1]."))
+    client = TestClient(create_app(
+        rag=LegalAidRAG(Store(tmp_path / "index.db"), HashEmbedder(), llm=llm),
+        sessions=SessionStore(tmp_path / "s.db")))
+
+    body = client.get("/api/health").json()
+    assert body["backend"] == "gemini"
+    assert body["model"] == "gemini-flash-latest"
+    assert body["corpus_ready"] is True
+
+
+def test_health_flags_empty_corpus(tmp_path):
+    """Fresh deploy before the crawl: healthy, but corpus_ready False."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.sessions import SessionStore
+
+    llm = GeminiLLM(api_key="k", transport=gemini_transport(reply_text=""))
+    client = TestClient(create_app(
+        rag=LegalAidRAG(Store(tmp_path / "empty.db"), HashEmbedder(), llm=llm),
+        sessions=SessionStore(tmp_path / "s.db")))
+
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert body["chunks"] == 0 and body["corpus_ready"] is False
