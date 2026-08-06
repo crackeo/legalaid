@@ -173,12 +173,23 @@ def create_app(rag: LegalAidRAG | None = None,
 
     @app.get("/api/health")
     def health():
-        """Liveness + corpus visibility, for Docker healthchecks and ops."""
+        """Liveness + corpus visibility, for Docker healthchecks and ops.
+
+        `chunks: 0` means the index is empty — the app answers "I don't find
+        this in the laws available to me" to everything until the corpus is
+        built (see docs/RUNBOOK.md).
+        """
+        # Report the backend actually answering, not the Claude default:
+        # GeminiLLM carries its own .model, so a Gemini deployment no longer
+        # reports a Claude model name.
+        backend = "gemini" if type(rag.llm).__name__ == "GeminiLLM" else "claude"
         return {
             "status": "ok",
             "chunks": rag.store.count(),
+            "corpus_ready": rag.store.count() > 0,
             "embedder": rag.embedder.name,
-            "model": rag.model,
+            "backend": backend,
+            "model": getattr(rag.llm, "model", None) or rag.model,
             "voice": {"stt": stt is not None, "tts": tts is not None},
         }
 
