@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legal Aid AI — Admin</title>
+<style>
+  :root { --bg:#f7f5f0; --panel:#fff; --ink:#1f2733; --muted:#6b7280;
+          --accent:#b3541e; --border:#e4e0d8; --bad:#b0342c; --good:#2f7d4f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181f; --panel:#1d232d; --ink:#e8e6e1; --muted:#98a1ad;
+            --accent:#e08a55; --border:#2c343f; --bad:#e07a72; --good:#6fc094; }
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink);
+         font:15px/1.5 Georgia, serif; padding:1.4rem; }
+  h1 { font-size:1.3rem; margin-bottom:1rem; }
+  h2 { font-size:1.05rem; margin:1.6rem 0 .6rem; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+           gap:.8rem; }
+  .tile { background:var(--panel); border:1px solid var(--border);
+          border-radius:12px; padding:.8rem 1rem; }
+  .tile .v { font-size:1.5rem; font-weight:600; }
+  .tile .l { color:var(--muted); font-size:.8rem; }
+  .bars { display:flex; align-items:flex-end; gap:4px; height:90px;
+          background:var(--panel); border:1px solid var(--border);
+          border-radius:12px; padding:.8rem; }
+  .bars .bar { flex:1; background:var(--accent); border-radius:3px 3px 0 0;
+               min-height:2px; position:relative; }
+  .bars .bar span { position:absolute; bottom:-1.4rem; left:50%;
+                    transform:translateX(-50%); font-size:.6rem;
+                    color:var(--muted); white-space:nowrap; }
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+          border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  th, td { text-align:left; padding:.55rem .8rem; border-bottom:1px solid var(--border);
+           vertical-align:top; font-size:.85rem; }
+  th { color:var(--muted); font-weight:600; }
+  .down { color:var(--bad); } .up { color:var(--good); }
+  .overflow { overflow-x:auto; }
+  #login { max-width:420px; margin:4rem auto; background:var(--panel);
+           border:1px solid var(--border); border-radius:12px; padding:1.4rem; }
+  #login input { width:100%; padding:.6rem; margin:.8rem 0; font:inherit;
+                 background:var(--bg); color:inherit;
+                 border:1px solid var(--border); border-radius:8px; }
+  #login button { background:var(--accent); color:#fff; border:0;
+                  border-radius:8px; padding:.55rem 1.2rem; font:inherit; cursor:pointer; }
+  .err { color:var(--bad); font-size:.85rem; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1>Admin access</h1>
+  <p class="l" style="color:var(--muted)">Enter the admin token (LEGALAID_ADMIN_TOKEN).</p>
+  <input id="token" type="password" placeholder="admin token">
+  <button onclick="load()">Open dashboard</button>
+  <p class="err" id="loginErr"></p>
+</div>
+
+<div id="dash" style="display:none">
+  <h1>Bhutan Legal Aid AI — operations</h1>
+  <div class="tiles" id="tiles"></div>
+  <h2>Questions per day (14 days)</h2>
+  <div class="bars" id="bars"></div>
+  <h2>Feedback review queue</h2>
+  <div class="overflow"><table id="fb">
+    <thead><tr><th></th><th>Question</th><th>Answer</th><th>Comment</th><th>Verified</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</div>
+
+<script>
+let token = sessionStorage.getItem('legalaid_admin') || '';
+
+async function api(path) {
+  const resp = await fetch(path, {headers: {Authorization: 'Bearer ' + token}});
+  if (!resp.ok) throw new Error(resp.status);
+  return resp.json();
+}
+
+function tile(label, value) {
+  return `<div class="tile"><div class="v">${value ?? '—'}</div><div class="l">${label}</div></div>`;
+}
+
+async function load() {
+  token = document.getElementById('token').value.trim() || token;
+  try {
+    const s = await api('/api/admin/stats');
+    sessionStorage.setItem('legalaid_admin', token);
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('dash').style.display = 'block';
+
+    document.getElementById('tiles').innerHTML =
+      tile('sessions', s.sessions) + tile('questions', s.questions) +
+      tile('answers', s.answers) +
+      tile('verified rate', s.verified_rate == null ? null
+           : Math.round(s.verified_rate * 100) + '%') +
+      tile('avg answer time', s.avg_answer_ms == null ? null
+           : (s.avg_answer_ms / 1000).toFixed(1) + 's') +
+      tile('👍 / 👎', `${s.feedback_up} / ${s.feedback_down}`);
+
+    const days = s.questions_per_day;
+    const max = Math.max(1, ...days.map(d => d.count));
+    document.getElementById('bars').innerHTML = days.length
+      ? days.map(d => `<div class="bar" style="height:${100 * d.count / max}%"
+          title="${d.day}: ${d.count}"><span>${d.day.slice(5)}</span></div>`).join('')
+      : '<span style="color:var(--muted)">no questions yet</span>';
+
+    const fb = (await api('/api/admin/feedback')).feedback;
+    document.querySelector('#fb tbody').innerHTML = fb.length
+      ? fb.map(f => `<tr>
+          <td class="${f.vote < 0 ? 'down' : 'up'}">${f.vote < 0 ? '👎' : '👍'}</td>
+          <td>${esc(f.question)}</td><td>${esc(short(f.answer))}</td>
+          <td>${esc(f.comment || '')}</td>
+          <td>${f.verified === false ? '<span class="down">no</span>' : 'yes'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--muted)">no feedback yet</td></tr>';
+  } catch (e) {
+    document.getElementById('loginErr').textContent =
+      e.message === '401' ? 'Invalid token.' : 'Could not load dashboard (' + e.message + ').';
+  }
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+function short(s) { return (s || '').split('\n')[0].slice(0, 160); }
+if (token) load();
+</script>
+</body>
+</html>

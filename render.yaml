@@ -1,0 +1,37 @@
+# Render blueprint — deploy with: Render dashboard -> New -> Blueprint -> this repo.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# After the first deploy, fill the corpus once from the service's Shell tab
+# (Render containers have open internet, unlike dev sandboxes):
+#     python -m ingest.pipeline crawl
+#     python -m ingest.pipeline build
+#     python -m rag.cli index
+#     python -m rag.cli eval
+# Then re-run `python -m ingest.pipeline update` weekly (Shell tab or a
+# scheduled job runner of your choice) to pick up new/amended Acts.
+
+services:
+  - type: web
+    name: legalaid
+    runtime: docker
+    plan: starter            # always-on; free tier sleeps and would drop SSE
+    healthCheckPath: /api/health
+    disk:
+      name: corpus
+      mountPath: /srv/legalaid/corpus   # raw PDFs, chunks.jsonl, index.db, sessions.db
+      sizeGB: 5
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # set in the dashboard, never in git
+      - key: OPENAI_API_KEY  # optional: voice (Whisper STT + TTS)
+        sync: false
+      - key: VOYAGE_API_KEY  # optional: semantic embeddings
+        sync: false
+      - key: LEGALAID_ADMIN_TOKEN
+        generateValue: true  # /admin enabled with a random token (dashboard shows it)
+      - key: LEGALAID_TRUST_PROXY
+        value: "1"           # Render fronts the app with a proxy that sets X-Forwarded-For
+      - key: LEGALAID_RATE_LIMIT
+        value: "20"
+      # WhatsApp channel (optional) — set all four in the dashboard to enable:
+      # WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET

@@ -1,0 +1,38 @@
+# Bhutan Legal Aid AI — single-VM deployment.
+#
+#   docker compose run --rm web python -m ingest.pipeline update   # first fill + weekly cron
+#   docker compose up -d                                           # web app (+ telegram if token set)
+#
+# Put TLS in front (Caddy/nginx/Traefik) — browsers require HTTPS for the mic.
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./corpus:/srv/legalaid/corpus
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}      # optional: enables voice
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}      # optional: semantic embeddings
+      LEGALAID_RATE_LIMIT: ${LEGALAID_RATE_LIMIT:-20}
+      LEGALAID_ADMIN_TOKEN: ${LEGALAID_ADMIN_TOKEN:-}   # optional: enables /admin
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}               # optional: WhatsApp channel
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+    restart: unless-stopped
+
+  telegram:
+    build: .
+    command: python -m app.telegram
+    volumes:
+      - ./corpus:/srv/legalaid/corpus
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    restart: unless-stopped
+    profiles: ["telegram"]   # start with: docker compose --profile telegram up -d

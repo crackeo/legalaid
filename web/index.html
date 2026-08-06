@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bhutan Legal Aid AI</title>
+<style>
+  :root {
+    --bg: #f7f5f0; --panel: #ffffff; --ink: #1f2733; --muted: #6b7280;
+    --accent: #b3541e; --accent-soft: #f6e3d7; --border: #e4e0d8;
+    --user: #23415f; --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14181f; --panel: #1d232d; --ink: #e8e6e1; --muted: #98a1ad;
+            --accent: #e08a55; --accent-soft: #3a2a20; --border: #2c343f;
+            --user: #2e4a6b; }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--ink);
+         font: 16px/1.55 Georgia, "Times New Roman", serif;
+         display: flex; flex-direction: column; min-height: 100vh; }
+  header { padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--border);
+           display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.25rem; font-weight: 600; }
+  header .tag { color: var(--muted); font-size: .85rem; font-style: italic; }
+  #chat { flex: 1; overflow-y: auto; padding: 1.4rem;
+          max-width: 860px; width: 100%; margin: 0 auto; }
+  .msg { margin: 0 0 1.1rem; display: flex; }
+  .msg .bubble { padding: .8rem 1.05rem; border-radius: var(--radius);
+                 max-width: 85%; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { justify-content: flex-end; }
+  .msg.user .bubble { background: var(--user); color: #fff;
+                      border-bottom-right-radius: 4px; }
+  .msg.bot .bubble { background: var(--panel); border: 1px solid var(--border);
+                     border-bottom-left-radius: 4px; }
+  .sources { font-size: .8rem; color: var(--muted); margin: -0.5rem 0 1.1rem .2rem;
+             max-width: 85%; }
+  .sources a { color: var(--accent); text-decoration: none; }
+  .fb { margin-top: .55rem; display: flex; gap: .4rem; }
+  .fb button { border: 1px solid var(--border); background: none; color: var(--muted);
+               border-radius: 8px; padding: .1rem .5rem; cursor: pointer;
+               font-size: .85rem; }
+  .fb button.sel { background: var(--accent-soft); color: var(--accent);
+                   border-color: var(--accent); }
+  form { display: flex; gap: .6rem; padding: 1rem 1.4rem 1.4rem;
+         max-width: 860px; width: 100%; margin: 0 auto; }
+  textarea { flex: 1; resize: none; padding: .75rem .95rem; font: inherit;
+             color: inherit; background: var(--panel);
+             border: 1px solid var(--border); border-radius: var(--radius); }
+  button.send { background: var(--accent); color: #fff; border: 0;
+                border-radius: var(--radius); padding: 0 1.3rem; font: inherit;
+                cursor: pointer; }
+  button.send:disabled { opacity: .5; cursor: default; }
+  button.mic { background: var(--panel); border: 1px solid var(--border);
+               border-radius: var(--radius); padding: 0 .95rem; font-size: 1.15rem;
+               cursor: pointer; display: none; }
+  button.mic.rec { background: #c0392b; border-color: #c0392b; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .voice-toggle { display: none; align-items: center; gap: .35rem;
+                  font-size: .8rem; color: var(--muted); }
+  .speak-btn { border: 1px solid var(--border); background: none; color: var(--muted);
+               border-radius: 8px; padding: .1rem .5rem; cursor: pointer; font-size: .85rem; }
+  .notice { font-size: .78rem; color: var(--muted); text-align: center;
+            padding: 0 1.4rem 1rem; }
+  .thinking { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bhutan Legal Aid AI</h1>
+  <span class="tag">Laws, rules &amp; regulations of the Kingdom of Bhutan — with citations</span>
+</header>
+
+<div id="chat" aria-live="polite"></div>
+
+<form id="form">
+  <textarea id="input" rows="2" required maxlength="4000"
+    placeholder="Ask about Bhutan's laws — e.g. “What is the penalty for defamation?”"></textarea>
+  <button class="mic" id="mic" type="button" title="Ask by voice (click to record, click again to stop)">🎤</button>
+  <button class="send" id="send" type="submit">Ask</button>
+</form>
+<label class="voice-toggle" id="voiceToggle" style="justify-content:center">
+  <input type="checkbox" id="autoSpeak"> read answers aloud
+</label>
+<p class="notice">Legal information, not legal advice. For your specific case contact the
+Bhutan National Legal Institute’s Legal Aid Center or a licensed Jabmi.</p>
+
+<script>
+const chat = document.getElementById('chat');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+let sessionId = sessionStorage.getItem('legalaid_session') || null;
+
+function bubble(role, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  wrap.appendChild(b);
+  chat.appendChild(wrap);
+  chat.scrollTop = chat.scrollHeight;
+  return b;
+}
+
+function renderSources(sources, cited) {
+  if (!sources.length) return;
+  const div = document.createElement('div');
+  div.className = 'sources';
+  // Built with DOM nodes only: doc titles and URLs originate from crawled
+  // PDF link text and must be treated as untrusted markup.
+  div.appendChild(document.createTextNode('Sources: '));
+  const shown = sources.filter(s => !cited || cited.includes(s.n));
+  if (!shown.length) return;
+  shown.forEach((s, i) => {
+    if (i > 0) div.appendChild(document.createTextNode(' · '));
+    const label = `[${s.n}] ${s.doc_title} §${s.section}, p.${s.page}`;
+    let url = null;
+    try {
+      const u = new URL(s.source_url);
+      if (u.protocol === 'https:' || u.protocol === 'http:') url = u.href;
+    } catch {}
+    if (url) {
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = label;
+      div.appendChild(a);
+    } else {
+      div.appendChild(document.createTextNode(label));
+    }
+  });
+  chat.appendChild(div);
+}
+
+function renderFeedback(messageId, bubbleEl) {
+  const div = document.createElement('div');
+  div.className = 'fb';
+  for (const [label, vote] of [['👍', 1], ['👎', -1]]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.onclick = async () => {
+      div.querySelectorAll('button').forEach(b => b.classList.remove('sel'));
+      btn.classList.add('sel');
+      await fetch('/api/feedback', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message_id: messageId, vote}),
+      });
+    };
+    div.appendChild(btn);
+  }
+  bubbleEl.appendChild(div);
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const question = input.value.trim();
+  if (!question) return;
+  input.value = '';
+  send.disabled = true;
+  bubble('user', question);
+  const bot = bubble('bot', '');
+  bot.classList.add('thinking');
+  bot.textContent = 'Consulting the laws of Bhutan…';
+
+  let sources = [], cited = null, started = false;
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: question, session_id: sessionId}),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!line.startsWith('data: ')) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'session') {
+          sessionId = ev.session_id;
+          sessionStorage.setItem('legalaid_session', sessionId);
+        } else if (ev.type === 'sources') {
+          sources = ev.sources;
+        } else if (ev.type === 'delta') {
+          if (!started) { bot.textContent = ''; bot.classList.remove('thinking'); started = true; }
+          bot.textContent += ev.text;
+          chat.scrollTop = chat.scrollHeight;
+        } else if (ev.type === 'replace' || ev.type === 'error') {
+          bot.classList.remove('thinking');
+          bot.textContent = ev.text;
+        } else if (ev.type === 'done') {
+          bot.classList.remove('thinking');
+          bot.textContent = ev.text;
+          cited = ev.cited;
+          maybeSpeak(ev.text, bot);
+        } else if (ev.type === 'saved') {
+          renderSources(sources, cited);
+          renderFeedback(ev.message_id, bot);
+        }
+      }
+    }
+  } catch (err) {
+    bot.classList.remove('thinking');
+    bot.textContent = 'Connection problem — please try again.';
+  } finally {
+    send.disabled = false;
+    input.focus();
+  }
+});
+
+// ---- Voice: push-to-talk mic (Whisper STT) + spoken answers (TTS) ----
+const mic = document.getElementById('mic');
+const voiceToggle = document.getElementById('voiceToggle');
+const autoSpeak = document.getElementById('autoSpeak');
+let recorder = null, recChunks = [], ttsAvailable = false, currentAudio = null;
+
+(async () => {
+  try {
+    const cfg = await (await fetch('/api/voice/config')).json();
+    ttsAvailable = cfg.tts;
+    if (cfg.stt && navigator.mediaDevices?.getUserMedia) mic.style.display = 'block';
+    if (cfg.tts) voiceToggle.style.display = 'flex';
+  } catch {}
+})();
+
+mic.addEventListener('click', async () => {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recChunks = [];
+    recorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''});
+    recorder.ondataavailable = (e) => recChunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      mic.classList.remove('rec');
+      mic.textContent = '🎤';
+      const blob = new Blob(recChunks, {type: recorder.mimeType || 'audio/webm'});
+      if (blob.size < 1000) return; // too short to be a question
+      input.placeholder = 'Transcribing…';
+      const fd = new FormData();
+      fd.append('audio', blob, 'question.webm');
+      try {
+        const resp = await fetch('/api/voice/transcribe', {method: 'POST', body: fd});
+        if (!resp.ok) throw new Error();
+        const {text} = await resp.json();
+        input.value = text;
+        if (ttsAvailable) autoSpeak.checked = true;  // spoken question → spoken answer
+        form.requestSubmit();
+      } catch {
+        input.placeholder = 'Could not transcribe — please try again or type.';
+      } finally {
+        setTimeout(() => { input.placeholder = 'Ask about Bhutan’s laws…'; }, 4000);
+      }
+    };
+    recorder.start();
+    mic.classList.add('rec');
+    mic.textContent = '⏹';
+  } catch {
+    mic.title = 'Microphone unavailable or permission denied';
+  }
+});
+
+async function speak(text, button) {
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (button) button.disabled = true;
+  try {
+    const resp = await fetch('/api/voice/speak', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    if (!resp.ok) return;
+    const url = URL.createObjectURL(await resp.blob());
+    currentAudio = new Audio(url);
+    currentAudio.onended = () => URL.revokeObjectURL(url);
+    await currentAudio.play();
+  } catch {} finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function maybeSpeak(text, bubbleEl) {
+  if (!ttsAvailable) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'speak-btn';
+  btn.textContent = '🔊';
+  btn.title = 'Read this answer aloud';
+  btn.onclick = () => speak(text, btn);
+  bubbleEl.appendChild(document.createTextNode(' '));
+  bubbleEl.appendChild(btn);
+  if (autoSpeak.checked) speak(text, btn);
+}
+
+// Restore a previous session's messages on reload.
+(async () => {
+  if (!sessionId) return;
+  try {
+    const resp = await fetch('/api/session/' + sessionId);
+    if (!resp.ok) { sessionStorage.removeItem('legalaid_session'); sessionId = null; return; }
+    const data = await resp.json();
+    for (const m of data.messages) {
+      bubble(m.role === 'user' ? 'user' : 'bot', m.content);
+      if (m.role === 'assistant') renderSources(m.sources, null);
+    }
+  } catch {}
+})();
+</script>
+</body>
+</html>
